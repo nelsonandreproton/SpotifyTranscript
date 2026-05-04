@@ -1,11 +1,16 @@
 """Generate a podcast episode summary via LM Studio (local LLM, streaming)."""
 
+import json
 import os
-import sys
 import requests
 
 LMSTUDIO_BASE = os.environ.get("LMSTUDIO_URL", "http://169.254.83.107:1234") + "/v1"
 LMSTUDIO_TIMEOUT_CONNECT = 3  # seconds — fast fail if not running
+
+# Conservative limit: ~6000 tokens for the transcript (1 token ≈ 4 chars).
+# Keeps total prompt well under 8K tokens, safe for any LM Studio context setting.
+# We take from the END because the deep-dive topic is in the final third.
+MAX_TRANSCRIPT_CHARS = 24_000
 
 SUMMARY_PROMPT = """You are summarizing a podcast episode transcript. The episode has three parts:
 1. The day's most important news
@@ -71,6 +76,12 @@ def summarize(transcript: str) -> str | None:
             return None
 
     model = get_model_name()
+
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        clipped = len(transcript) - MAX_TRANSCRIPT_CHARS
+        transcript = transcript[-MAX_TRANSCRIPT_CHARS:]
+        print(f"      Transcript clipped: {clipped} chars removed from start (deep-dive preserved)")
+
     prompt = SUMMARY_PROMPT + transcript
 
     print(f"      Model   : {model}")
@@ -102,12 +113,18 @@ def summarize(transcript: str) -> str | None:
                     data = line[6:]
                     if data == "[DONE]":
                         break
-                    import json
                     chunk = json.loads(data)
-                    token = chunk["choices"][0]["delta"].get("content", "")
+                    choices = chunk.get("choices")
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    token = delta.get("content", "")
                     if token:
                         print(token, end="", flush=True)
                         summary_parts.append(token)
+                    finish = choices[0].get("finish_reason")
+                    if finish and finish != "stop":
+                        print(f"\n      [finish_reason: {finish}]")
     except requests.exceptions.RequestException as e:
         print(f"\n      LM Studio error: {e}")
         return None

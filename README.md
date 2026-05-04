@@ -8,8 +8,7 @@ Transcribe Spotify podcast episodes to markdown files in your Obsidian vault. Fr
 2. Finds the RSS feed via [PodcastIndex.org](https://podcastindex.org)
 3. Downloads the MP3 from the RSS feed
 4. Transcribes locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — shows live progress bar
-5. Generates a structured summary via LM Studio (optional — skipped if not running)
-6. Saves a `.md` file with frontmatter, summary, and transcript to your Obsidian vault
+5. Saves a `.md` file with frontmatter and transcript to your Obsidian vault
 
 > **Note:** Works for any podcast distributed via RSS. Will not work for Spotify-exclusive content.
 
@@ -48,8 +47,6 @@ Optional:
 WHISPER_MODEL=medium.en
 HF_TOKEN=your_hf_token_here
 HF_HUB_DISABLE_SYMLINKS_WARNING=1
-LMSTUDIO_URL=http://169.254.83.107:1234
-LMSTUDIO_MODEL=qwen2.5-7b-instruct-1m
 ```
 
 ### 4. First run (Whisper model download)
@@ -71,14 +68,7 @@ Output is saved to your Obsidian vault at:
 
 The markdown file contains:
 - YAML frontmatter (title, show, Spotify URL, date, transcription timestamp)
-- **Summary** section (if LM Studio was running) — key news, main topic, takeaways
 - **Transcript** section — full transcript in readable paragraphs
-
-## Summary generation (optional)
-
-If [LM Studio](https://lmstudio.ai) is running with a loaded model, a structured summary is generated automatically and streamed to the terminal in real time. If LM Studio is not running, the script asks whether to skip or retry after starting it.
-
-Recommended model: `qwen2.5-7b-instruct-1m`
 
 ## Whisper models
 

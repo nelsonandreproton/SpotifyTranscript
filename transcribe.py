@@ -35,7 +35,6 @@ def _check_env() -> None:
 from spotify import get_episode_metadata
 from podcast_index import find_rss_feed, find_mp3_url, download_mp3
 from transcriber import transcribe
-from summarizer import summarize, is_lmstudio_running
 from output import write_markdown
 
 
@@ -81,29 +80,13 @@ def main(spotify_url: str) -> None:
         except OSError:
             pass
 
-    # 6. Summary (optional — requires LM Studio)
-    summary = None
-    lm_available = is_lmstudio_running()
-    if lm_available:
-        print("\n[+] Generating summary via LM Studio...")
-        summary = summarize(transcript)
-    else:
-        print("\n[+] Summary: LM Studio not running.")
-        print("    Start LM Studio and load the model to generate a summary.")
-        print("    Skip? [Enter] or retry? [r]: ", end="", flush=True)
-        choice = input().strip().lower()
-        if choice == "r":
-            print("    Retrying...")
-            summary = summarize(transcript)
-
-    # 7. Write markdown
+    # 6. Write markdown
     output_path = write_markdown(
         episode_title=meta["episode_title"],
         show_name=meta["show_name"],
         spotify_url=spotify_url,
         pub_date=pub_date,
         transcript=transcript,
-        summary=summary,
     )
 
     print(f"\n✓ Done! Saved to:\n  {output_path}\n")
