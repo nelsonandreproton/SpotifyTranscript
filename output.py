@@ -17,6 +17,17 @@ def _yaml_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+_HR = "\n\n---\n\n"
+
+
+def _mark_sponsor_boundaries(text: str) -> str:
+    if "Next up, the main episode." in text:
+        text = text.replace("Next up, the main episode.", "Next up, the main episode." + _HR, 1)
+    if "Welcome back to the AI Daily Brief." in text:
+        text = text.replace("Welcome back to the AI Daily Brief.", _HR + "Welcome back to the AI Daily Brief.", 1)
+    return text
+
+
 def _wrap_transcript(text: str) -> str:
     """Break long transcript into readable paragraphs (~5 sentences each)."""
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
@@ -78,7 +89,7 @@ tags:
 
 ## Transcript
 
-{_wrap_transcript(transcript)}
+{_wrap_transcript(_mark_sponsor_boundaries(transcript))}
 """
 
     output_path.write_text(content, encoding="utf-8")
