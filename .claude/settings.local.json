@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:podcastindex-org.github.io)",
+      "WebFetch(domain:podcastindex.org)"
+    ]
+  }
+}
