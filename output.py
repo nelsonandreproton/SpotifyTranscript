@@ -38,8 +38,9 @@ def write_markdown(
     spotify_url: str,
     pub_date: str,
     transcript: str,
+    summary: str | None = None,
 ) -> Path:
-    """Write transcript to Obsidian vault and return the file path."""
+    """Write transcript (and optional summary) to Obsidian vault and return the file path."""
     output_dir = Path(os.environ["OBSIDIAN_TRANSCRIPTIONS_PATH"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -57,6 +58,8 @@ def write_markdown(
 
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
+    summary_section = f"\n## Summary\n\n{summary}\n" if summary else ""
+
     content = f"""---
 title: "{_yaml_escape(episode_title)}"
 show: "{_yaml_escape(show_name)}"
@@ -73,7 +76,7 @@ tags:
 **Show:** {show_name}
 **Spotify:** [{spotify_url}]({spotify_url})
 **Published:** {pub_date}
-
+{summary_section}
 ---
 
 ## Transcript

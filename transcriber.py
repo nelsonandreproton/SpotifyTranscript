@@ -1,6 +1,7 @@
 """Transcribe an MP3 file using faster-whisper (local, free, CPU-based)."""
 
 import os
+import sys
 from faster_whisper import WhisperModel
 
 VALID_MODELS = frozenset({
@@ -12,9 +13,24 @@ VALID_MODELS = frozenset({
 })
 
 
+def _format_bar(current: float, total: float, width: int = 30) -> str:
+    pct = min(current / total, 1.0) if total > 0 else 0
+    filled = int(width * pct)
+    bar = "█" * filled + "░" * (width - filled)
+    elapsed = _fmt_time(current)
+    duration = _fmt_time(total)
+    return f"[{bar}] {pct*100:5.1f}% — {elapsed} / {duration}"
+
+
+def _fmt_time(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
+
+
 def transcribe(audio_path: str) -> str:
     """
     Transcribe audio_path and return the full transcript as a string.
+    Shows a live progress bar as segments are processed.
     Model is read from WHISPER_MODEL env var (default: medium.en).
     """
     model_name = os.environ.get("WHISPER_MODEL", "medium.en")
@@ -23,16 +39,20 @@ def transcribe(audio_path: str) -> str:
             f"Invalid WHISPER_MODEL {model_name!r}. Valid options: {sorted(VALID_MODELS)}"
         )
 
-    print(f"Loading Whisper model: {model_name}")
+    print(f"      Model   : {model_name}")
     model = WhisperModel(model_name, device="cpu", compute_type="int8")
 
-    print(f"Transcribing: {audio_path}")
     segments, info = model.transcribe(audio_path, language="en", beam_size=5)
-
-    print(f"Detected language: {info.language} (probability {info.language_probability:.2f})")
+    duration = info.duration
+    print(f"      Duration: {_fmt_time(duration)}")
+    print(f"      Language: {info.language} ({info.language_probability:.0%})")
+    print()
 
     parts = []
     for segment in segments:
         parts.append(segment.text.strip())
+        bar = _format_bar(segment.end, duration)
+        print(f"\r      {bar}", end="", flush=True)
 
+    print()  # newline after progress bar
     return " ".join(parts)
