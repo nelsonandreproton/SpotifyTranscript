@@ -3,6 +3,7 @@
 import os
 import re
 from datetime import datetime, UTC
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 
@@ -11,6 +12,14 @@ def _safe_filename(name: str) -> str:
     name = name.lstrip(".")
     name = re.sub(r"\s+", " ", name).strip()
     return name[:200]
+
+
+def _pub_date_prefix(pub_date: str) -> str:
+    """Return YYYY-MM-DD prefix from an RFC 2822 pub_date string, or empty string on failure."""
+    try:
+        return parsedate_to_datetime(pub_date).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
 
 
 def _yaml_escape(value: str) -> str:
@@ -54,7 +63,10 @@ def write_markdown(
     output_dir = Path(os.environ["OBSIDIAN_TRANSCRIPTIONS_PATH"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    filename = _safe_filename(episode_title) + ".md"
+    date_prefix = _pub_date_prefix(pub_date)
+    safe_title = _safe_filename(episode_title)
+    stem = f"{date_prefix} {safe_title}" if date_prefix else safe_title
+    filename = stem + ".md"
     output_path = output_dir / filename
 
     # Guard against path traversal: resolved path must stay inside output_dir
@@ -62,7 +74,6 @@ def write_markdown(
         raise ValueError(f"Computed output path escapes the transcriptions directory: {output_path}")
 
     if output_path.exists():
-        stem = _safe_filename(episode_title)
         suffix = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         output_path = output_dir / f"{stem}_{suffix}.md"
 
