@@ -80,7 +80,6 @@ def _api_get(path: str, params: dict) -> dict:
         params=params,
         headers=_auth_headers(),
         timeout=15,
-        allow_redirects=False,
     )
     resp.raise_for_status()
     return resp.json()
@@ -231,9 +230,17 @@ def find_mp3_url(rss_url: str, episode_title: str) -> tuple[str, str]:
     retry=retry_if_exception(_is_retryable),
 )
 def download_mp3(mp3_url: str, dest_path: str) -> None:
-    """Stream-download the MP3, writing to dest_path."""
-    with requests.get(mp3_url, stream=True, timeout=(10, 60), allow_redirects=False) as resp:
+    """Stream-download the MP3, writing to dest_path.
+
+    Redirects are followed (CDN URLs redirect legitimately), but the final
+    URL after all redirects is validated to block SSRF via open redirects.
+    """
+    with requests.get(mp3_url, stream=True, timeout=(10, 60)) as resp:
         resp.raise_for_status()
+        # Validate the final URL after any redirects
+        final_url = resp.url
+        if final_url != mp3_url:
+            _validate_url(final_url, "MP3 redirect destination")
         total = 0
         with open(dest_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
