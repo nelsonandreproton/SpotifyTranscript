@@ -3,6 +3,7 @@
 import hashlib
 import os
 import time
+from datetime import datetime, UTC
 from difflib import SequenceMatcher
 
 import feedparser
@@ -59,6 +60,66 @@ def _api_get(path: str, params: dict) -> dict:
 
 def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+
+def get_feed_url(feed_id: str) -> str:
+    """Return the RSS URL for a known PodcastIndex feed ID."""
+    data = _api_get("/podcasts/byfeedid", {"id": feed_id})
+    feed = data.get("feed", {})
+    url = feed.get("url")
+    if not url:
+        raise RuntimeError(f"PodcastIndex returned no URL for feed_id={feed_id!r}")
+    _validate_https_url(url, "RSS feed URL")
+    return url
+
+
+def get_recent_episodes(feed_id: str, max_episodes: int = 10) -> list[dict]:
+    """
+    Return up to max_episodes recent episodes for a feed, each as a dict with:
+      guid, title, mp3_url, pub_date, spotify_url (may be empty string)
+    Ordered newest-first.
+    """
+    data = _api_get("/episodes/byfeedid", {"id": feed_id, "max": max_episodes})
+    items = data.get("items", [])
+    episodes = []
+    for item in items:
+        # Find audio URL — prefer enclosureUrl, fall back to link fields
+        mp3_url = item.get("enclosureUrl", "")
+        if not mp3_url:
+            continue
+        try:
+            _validate_https_url(mp3_url, "MP3 URL")
+        except ValueError:
+            continue
+
+        # Some feeds include a Spotify link in the episode's additional metadata
+        spotify_url = ""
+        for alt in item.get("alternateEnclosureList") or []:
+            for src in alt.get("sources") or []:
+                href = src.get("uri", "")
+                if "spotify.com" in href:
+                    spotify_url = href
+                    break
+
+        pretty = item.get("datePublishedPretty", "")
+        if not pretty:
+            ts = item.get("datePublished")
+            pretty = (
+                datetime.fromtimestamp(ts, tz=UTC).strftime("%a, %d %b %Y %H:%M:%S +0000")
+                if ts
+                else ""
+            )
+
+        episodes.append(
+            {
+                "guid": str(item.get("guid") or item.get("id") or ""),
+                "title": item.get("title", ""),
+                "mp3_url": mp3_url,
+                "pub_date": pretty,
+                "spotify_url": spotify_url,
+            }
+        )
+    return episodes
 
 
 def find_rss_feed(show_name: str) -> str:
@@ -131,12 +192,12 @@ def find_mp3_url(rss_url: str, episode_title: str) -> tuple[str, str]:
     return mp3_url, pub_date
 
 
-def download_mp3(mp3_url: str, dest_fd: int) -> None:
-    """Stream-download the MP3, writing to the open file descriptor dest_fd."""
+def download_mp3(mp3_url: str, dest_path: str) -> None:
+    """Stream-download the MP3, writing to dest_path."""
     with requests.get(mp3_url, stream=True, timeout=(10, 60)) as resp:
         resp.raise_for_status()
         total = 0
-        with os.fdopen(dest_fd, "wb") as f:
+        with open(dest_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
                 total += len(chunk)
                 if total > MAX_DOWNLOAD_BYTES:

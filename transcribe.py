@@ -61,11 +61,12 @@ def main(spotify_url: str) -> None:
     print(f"      MP3     : {mp3_url}")
     print(f"      Date    : {pub_date}")
 
-    # 4. Download MP3 — keep fd open while writing to avoid TOCTOU
+    # 4. Download MP3
     print("\n[4/5] Downloading audio...")
     fd, tmp_path = tempfile.mkstemp(suffix=".mp3")
+    os.close(fd)
     try:
-        download_mp3(mp3_url, fd)  # download_mp3 closes fd via os.fdopen
+        download_mp3(mp3_url, tmp_path)
         size_mb = Path(tmp_path).stat().st_size / 1_048_576
         print(f"      Downloaded {size_mb:.1f} MB")
 
