@@ -27,11 +27,26 @@ def _safe_filename(name: str) -> str:
 
 
 def _pub_date_prefix(pub_date: str) -> str:
-    """Return YYYY-MM-DD prefix from an RFC 2822 pub_date string, or empty string on failure."""
+    """Return YYYY-MM-DD prefix from a pub_date string, or empty string on failure.
+
+    Handles:
+    - RFC 2822: "Fri, 01 May 2026 20:45:04 GMT"  (from RSS feed / transcribe.py)
+    - PodcastIndex pretty: "May 01, 2026 3:45pm"  (from sync.py via API)
+    """
+    if not pub_date:
+        return ""
+    # Try RFC 2822 first (email.utils handles timezone variations)
     try:
         return parsedate_to_datetime(pub_date).strftime("%Y-%m-%d")
     except Exception:
-        return ""
+        pass
+    # Try PodcastIndex pretty format: "Month DD, YYYY H:MMam/pm"
+    for fmt in ("%B %d, %Y %I:%M%p", "%B %d, %Y %I%p"):
+        try:
+            return datetime.strptime(pub_date.strip(), fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return ""
 
 
 def _yaml_escape(value: str) -> str:
