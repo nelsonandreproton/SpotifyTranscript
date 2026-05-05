@@ -6,3 +6,5 @@
 venv/
 *.mp3
 *.wav
+state.json
+state.tmp

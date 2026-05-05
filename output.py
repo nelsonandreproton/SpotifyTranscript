@@ -6,12 +6,24 @@ from datetime import datetime, UTC
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+_WINDOWS_RESERVED = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+})
+
 
 def _safe_filename(name: str) -> str:
+    name = name.replace("\x00", "")          # strip null bytes
     name = re.sub(r'[<>:"/\\|?*]', "", name)
     name = name.lstrip(".")
     name = re.sub(r"\s+", " ", name).strip()
-    return name[:200]
+    name = name[:200]
+    # Avoid Windows reserved device names (with or without extension)
+    stem = name.split(".")[0].upper()
+    if stem in _WINDOWS_RESERVED:
+        name = f"_{name}"
+    return name
 
 
 def _pub_date_prefix(pub_date: str) -> str:

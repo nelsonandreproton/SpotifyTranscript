@@ -75,20 +75,19 @@ def main(spotify_url: str) -> None:
         transcript = transcribe(tmp_path)
         print(f"      Characters: {len(transcript)}")
 
+        # 6. Write markdown (inside try so transcript is always in scope)
+        output_path = write_markdown(
+            episode_title=meta["episode_title"],
+            show_name=meta["show_name"],
+            spotify_url=spotify_url,
+            pub_date=pub_date,
+            transcript=transcript,
+        )
     finally:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
-
-    # 6. Write markdown
-    output_path = write_markdown(
-        episode_title=meta["episode_title"],
-        show_name=meta["show_name"],
-        spotify_url=spotify_url,
-        pub_date=pub_date,
-        transcript=transcript,
-    )
 
     print(f"\n✓ Done! Saved to:\n  {output_path}\n")
 

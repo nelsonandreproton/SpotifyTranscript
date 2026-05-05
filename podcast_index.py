@@ -1,10 +1,13 @@
 """Find RSS feed and MP3 URL for a podcast episode via PodcastIndex API."""
 
 import hashlib
+import ipaddress
 import os
+import socket
 import time
 from datetime import datetime, UTC
 from difflib import SequenceMatcher
+from urllib.parse import urlparse
 
 import feedparser
 import requests
@@ -15,12 +18,13 @@ MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
 RSS_FEED_MIN_SIMILARITY = 0.3
 EPISODE_MIN_SIMILARITY = 0.4
 
-_RETRYABLE = frozenset({"500", "502", "503", "504"})
-
 
 def _is_retryable(exc: BaseException) -> bool:
-    msg = str(exc)
-    return any(code in msg for code in _RETRYABLE)
+    if isinstance(exc, requests.exceptions.HTTPError):
+        return exc.response is not None and exc.response.status_code in {500, 502, 503, 504}
+    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    return False
 
 
 def _auth_headers() -> dict:
@@ -37,9 +41,32 @@ def _auth_headers() -> dict:
     }
 
 
-def _validate_https_url(url: str, label: str) -> None:
+def _validate_url(url: str, label: str) -> None:
+    """Validate URL scheme and block requests to private/loopback/link-local addresses."""
     if not url.startswith("https://") and not url.startswith("http://"):
         raise ValueError(f"{label} has an unexpected scheme (got {url!r}); only http/https allowed")
+    hostname = urlparse(url).hostname or ""
+    if not hostname:
+        raise ValueError(f"{label} has no hostname: {url!r}")
+    # Block bare IP literals that are private/loopback/link-local
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise ValueError(f"{label} resolves to a disallowed address: {hostname!r}")
+    except ValueError as exc:
+        if "disallowed" in str(exc):
+            raise
+        # hostname is not a bare IP — resolve and check
+        try:
+            resolved = socket.getaddrinfo(hostname, None)
+            for *_, addr in resolved:
+                ip = ipaddress.ip_address(addr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    raise ValueError(
+                        f"{label} hostname {hostname!r} resolves to a disallowed address: {addr[0]!r}"
+                    )
+        except socket.gaierror:
+            pass  # DNS failure — let the downstream request fail naturally
 
 
 @retry(
@@ -53,6 +80,7 @@ def _api_get(path: str, params: dict) -> dict:
         params=params,
         headers=_auth_headers(),
         timeout=15,
+        allow_redirects=False,
     )
     resp.raise_for_status()
     return resp.json()
@@ -69,7 +97,7 @@ def get_feed_url(feed_id: str) -> str:
     url = feed.get("url")
     if not url:
         raise RuntimeError(f"PodcastIndex returned no URL for feed_id={feed_id!r}")
-    _validate_https_url(url, "RSS feed URL")
+    _validate_url(url, "RSS feed URL")
     return url
 
 
@@ -88,7 +116,7 @@ def get_recent_episodes(feed_id: str, max_episodes: int = 10) -> list[dict]:
         if not mp3_url:
             continue
         try:
-            _validate_https_url(mp3_url, "MP3 URL")
+            _validate_url(mp3_url, "MP3 URL")
         except ValueError:
             continue
 
@@ -110,9 +138,14 @@ def get_recent_episodes(feed_id: str, max_episodes: int = 10) -> list[dict]:
                 else ""
             )
 
+        guid = str(item.get("guid") or item.get("id") or "")
+        if not guid:
+            print(f"      WARNING: skipping episode with no guid/id: {item.get('title', '?')!r}")
+            continue
+
         episodes.append(
             {
-                "guid": str(item.get("guid") or item.get("id") or ""),
+                "guid": guid,
                 "title": item.get("title", ""),
                 "mp3_url": mp3_url,
                 "pub_date": pretty,
@@ -141,7 +174,7 @@ def find_rss_feed(show_name: str) -> str:
     if not feed_url:
         raise RuntimeError("PodcastIndex returned a feed with no URL")
 
-    _validate_https_url(feed_url, "RSS feed URL")
+    _validate_url(feed_url, "RSS feed URL")
     return feed_url
 
 
@@ -187,14 +220,19 @@ def find_mp3_url(rss_url: str, episode_title: str) -> tuple[str, str]:
     if not mp3_url:
         raise RuntimeError(f"No audio enclosure found for episode: {episode_title!r}")
 
-    _validate_https_url(mp3_url, "MP3 URL")
+    _validate_url(mp3_url, "MP3 URL")
     pub_date = best_entry.get("published", "")
     return mp3_url, pub_date
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception(_is_retryable),
+)
 def download_mp3(mp3_url: str, dest_path: str) -> None:
     """Stream-download the MP3, writing to dest_path."""
-    with requests.get(mp3_url, stream=True, timeout=(10, 60)) as resp:
+    with requests.get(mp3_url, stream=True, timeout=(10, 60), allow_redirects=False) as resp:
         resp.raise_for_status()
         total = 0
         with open(dest_path, "wb") as f:

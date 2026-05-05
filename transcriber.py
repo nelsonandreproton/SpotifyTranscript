@@ -1,7 +1,6 @@
 """Transcribe an MP3 file using faster-whisper (local, free, CPU-based)."""
 
 import os
-import sys
 from faster_whisper import WhisperModel
 
 VALID_MODELS = frozenset({
@@ -11,6 +10,14 @@ VALID_MODELS = frozenset({
     "medium", "medium.en",
     "large-v1", "large-v2", "large-v3",
 })
+
+_model_cache: dict[str, WhisperModel] = {}
+
+
+def _get_model(model_name: str) -> WhisperModel:
+    if model_name not in _model_cache:
+        _model_cache[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8")
+    return _model_cache[model_name]
 
 
 def _format_bar(current: float, total: float, width: int = 30) -> str:
@@ -40,7 +47,7 @@ def transcribe(audio_path: str) -> str:
         )
 
     print(f"      Model   : {model_name}")
-    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    model = _get_model(model_name)
 
     segments, info = model.transcribe(audio_path, language="en", beam_size=5)
     duration = info.duration
