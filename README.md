@@ -70,6 +70,65 @@ The markdown file contains:
 - YAML frontmatter (title, show, Spotify URL, date, transcription timestamp)
 - **Transcript** section — full transcript in readable paragraphs
 
+## Daily automation (sync + summarize)
+
+`run_daily.bat` activates the venv, runs `sync.py` to fetch new episodes, then runs
+`post_process.py` to generate summaries and update the HTML mindmap.
+
+### Manual run
+
+```bat
+run_daily.bat
+```
+
+### Scheduled daily at 10:00 via Windows Task Scheduler
+
+Run once in PowerShell (Admin not required):
+
+```powershell
+$action  = New-ScheduledTaskAction -Execute "C:\dev\SpotifyTranscript\run_daily.bat"
+$trigger = New-ScheduledTaskTrigger -Daily -At "10:00"
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RunOnlyIfNetworkAvailable
+Register-ScheduledTask -TaskName "SpotifyTranscript Daily" `
+    -Action $action -Trigger $trigger -Settings $settings -Force
+```
+
+`-StartWhenAvailable` means if the machine is off at 10:00, the task runs as soon as
+it wakes up.
+
+To remove the task:
+
+```powershell
+Unregister-ScheduledTask -TaskName "SpotifyTranscript Daily" -Confirm:$false
+```
+
+### Post-processing LLM setup
+
+`post_process.py` uses NVIDIA NIM by default, with a local Qwen2.5-7B fallback.
+
+**NVIDIA NIM (recommended — fast, no local GPU needed):**
+
+Add to `.env`:
+```env
+NVIDIA_API_KEY=nvapi-...
+```
+
+**Local Qwen2.5-7B fallback (no internet required, ~4.7 GB download):**
+
+```bash
+pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+huggingface-cli download bartowski/Qwen2.5-7B-Instruct-GGUF \
+  --include "Qwen2.5-7B-Instruct-Q4_K_M.gguf" \
+  --local-dir ./models
+```
+
+Add to `.env` (optional — default path is `.\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf`):
+```env
+LOCAL_MODEL_PATH=.\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf
+```
+
+If `NVIDIA_API_KEY` is set and reachable, NIM is used. Otherwise the local model loads automatically.
+
 ## Whisper models
 
 | Model | Cache size | Speed (30 min ep) | Quality |
