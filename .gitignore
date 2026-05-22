@@ -8,3 +8,6 @@ venv/
 *.wav
 state.json
 state.tmp
+logs/
+*.html.bak
+*.html.tmp

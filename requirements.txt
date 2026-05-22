@@ -3,7 +3,8 @@ requests==2.32.3
 feedparser==6.0.11
 python-dotenv==1.0.1
 tenacity==9.0.0
-# post_process.py: LLM summarization
+# post_process.py: LLM summarization + HTML parsing
 openai>=1.30.0
+beautifulsoup4>=4.12.0
 # llama-cpp-python is optional (local Qwen fallback). Install separately:
 # pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
