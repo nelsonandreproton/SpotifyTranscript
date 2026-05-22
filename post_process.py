@@ -31,12 +31,21 @@ MAX_TRANSCRIPT_CHARS = 24_000
 # Known theme sections in the HTML, in document order.
 # LLM picks the best-matching keyword; we use it to locate the insertion point.
 THEMES = [
-    ("modelos", "🤖 Modelos"),
-    ("negocio", "💰 Modelo de Negócio"),
-    ("trabalho", "👥 Trabalho"),
-    ("infraestrutura", "🏗️ Infraestrutura"),
-    ("sociedade", "🌐 Sociedade"),
+    ("modelos", "🤖 Models & Harnesses"),
+    ("negocio", "💰 Business Model"),
+    ("trabalho", "👥 Work & Jobs"),
+    ("infraestrutura", "🏗️ Infrastructure"),
+    ("sociedade", "🌐 Society & Policy"),
 ]
+
+# Short description shown under each theme heading in the HTML.
+THEME_DESCS = {
+    "modelos": "The competition has shifted: it's now more about the environment around the model than the model itself.",
+    "negocio": "How AI is reshaping business models, pricing, and competitive dynamics across the industry.",
+    "trabalho": "The ways AI is changing how we work, hire, and think about productivity and career paths.",
+    "infraestrutura": "Compute, energy, data-center build-out, and the infrastructure race underpinning the AI boom.",
+    "sociedade": "Policy, safety, public perception, and the broader societal implications of rapid AI deployment.",
+}
 
 # Central actors tracked across episodes.
 ACTORS = ["OpenAI", "Anthropic", "Google", "Meta", "Atlassian", "xAI/SpaceX"]
@@ -82,6 +91,10 @@ def _set_fm_flag(frontmatter: str, key: str, value: str) -> str:
 
 def _is_summarized(frontmatter: str) -> bool:
     return _get_fm_value(frontmatter, "summarized").lower() == "true"
+
+
+def _is_card_english(frontmatter: str) -> bool:
+    return _get_fm_value(frontmatter, "card_english").lower() == "true"
 
 
 # ── Markdown summary insertion ───────────────────────────────────────────────
@@ -140,30 +153,31 @@ _CARD_SCHEMA = {
             "enum": [t[0] for t in THEMES],
             "description": "Best-matching theme keyword from the list.",
         },
-        "date_pt": {
+        "date_en": {
             "type": "string",
-            "description": "Publication date in Portuguese format, e.g. '07 Mai 2026'.",
+            "description": "Publication date in English format, e.g. 'May 7, 2026'.",
         },
         "title": {"type": "string"},
-        "summary_pt": {
+        "summary_en": {
             "type": "string",
-            "description": "1–2 sentence summary in Portuguese.",
+            "description": "1–2 sentence summary in English.",
         },
         "key_points": {
             "type": "array",
             "items": {"type": "string"},
             "minItems": 2,
             "maxItems": 4,
-            "description": "2–4 short key facts in Portuguese.",
+            "description": "2–4 short key facts in English, each under 80 chars.",
         },
         "tags": {
             "type": "array",
             "items": {"type": "string"},
             "minItems": 1,
             "maxItems": 4,
+            "description": "1–4 short English topic tags.",
         },
     },
-    "required": ["theme_keyword", "date_pt", "title", "summary_pt", "key_points", "tags"],
+    "required": ["theme_keyword", "date_en", "title", "summary_en", "key_points", "tags"],
 }
 
 
@@ -225,10 +239,10 @@ def _build_card_messages(title: str, pub_date: str, summary_bullets: str) -> lis
                 f"Summary:\n{summary_bullets}\n\n"
                 f"Available themes (pick the best match for theme_keyword):\n{_THEME_DESCRIPTIONS}\n\n"
                 f"Rules:\n"
-                f"- date_pt: convert '{pub_date}' to Portuguese abbreviated month format, e.g. '07 Mai 2026'\n"
-                f"- summary_pt: 1–2 sentences in European Portuguese\n"
-                f"- key_points: 2–4 items in European Portuguese, each under 80 chars\n"
-                f"- tags: 1–4 short English or Portuguese topic tags\n"
+                f"- date_en: convert '{pub_date}' to English format, e.g. 'May 7, 2026'\n"
+                f"- summary_en: 1–2 sentences in English\n"
+                f"- key_points: 2–4 items in English, each under 80 chars\n"
+                f"- tags: 1–4 short English topic tags\n"
             ),
         },
     ]
@@ -271,9 +285,9 @@ def _render_card_html(card: dict) -> str:
         f' data-actors="{actors_attr}" data-date="{iso_date}"'
         f' data-summary="{summary_full}" data-obsidian="{obsidian_uri}"'
         f' style="--accent:{accent}">\n'
-        f'    <div class="article-date">{_html.escape(card["date_pt"])}</div>\n'
+        f'    <div class="article-date">{_html.escape(card.get("date_en", card.get("date_pt", "")))}</div>\n'
         f'    <h4 class="article-title">{_html.escape(card["title"])}</h4>\n'
-        f'    <p class="article-summary">{_html.escape(card["summary_pt"])}</p>\n'
+        f'    <p class="article-summary">{_html.escape(card.get("summary_en", card.get("summary_pt", "")))}</p>\n'
         f'    <ul class="key-points">\n'
         f'{points_html}'
         f'    </ul>\n'
@@ -408,10 +422,61 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
     - Add actor filter row + two-axis JS
     - Update dynamic stats (episode count, date range)
     """
-    from bs4 import BeautifulSoup, Tag
+    from bs4 import BeautifulSoup, Tag, NavigableString as _NS
 
     html = html_path.read_text(encoding="utf-8")
     soup = BeautifulSoup(html, "html.parser")
+
+    # ── 0. Patch static page-level strings to English ────────────────────────
+    html_tag = soup.find("html")
+    if html_tag:
+        html_tag["lang"] = "en"
+
+    title_tag = soup.find("title")
+    if title_tag:
+        # Rebuild date range from file name or just use year
+        title_tag.string = "AI Daily Brief — Mind Map"
+
+    h1_tag = soup.find("h1")
+    if h1_tag:
+        h1_tag.string = "AI Daily Brief — Mind Map"
+
+    # Central node: translate in-place
+    central = soup.find("div", class_="central-node")
+    if central:
+        h2 = central.find("h2")
+        if h2:
+            h2.string = "The Agentic Era Meets Physical Reality"
+        p = central.find("p")
+        if p:
+            p.string = (
+                "May 2026 marks the inflection point where AI moved from unbounded experimentation "
+                "to colliding with compute scarcity, policy decisions, and the maturing of how we work with agents."
+            )
+
+    # Theme section h3 + theme-desc
+    _THEME_H3 = {kw: label for kw, label in THEMES}
+    for section in soup.find_all("div", class_="theme-section"):
+        kw = section.get("data-theme", "")
+        if not kw:
+            continue
+        h3 = section.find("h3")
+        if h3:
+            h3.string = _THEME_H3.get(kw, h3.get_text())
+        desc_p = section.find("p", class_="theme-desc")
+        if desc_p:
+            desc_p.string = THEME_DESCS.get(kw, desc_p.get_text())
+
+    # Theme filter buttons
+    _THEME_LABEL = {kw: label.split(" ", 1)[-1] if " " in label else label for kw, label in THEMES}
+    theme_controls = soup.find("div", class_="theme-controls")
+    if theme_controls:
+        for btn in theme_controls.find_all("button", class_="filter-btn"):
+            df = btn.get("data-filter", "")
+            if df == "all":
+                btn.string = "All"
+            elif df in _THEME_LABEL:
+                btn.string = _THEME_LABEL[df]
 
     # ── 1. Build title→meta lookup from md files ─────────────────────────────
     from urllib.parse import quote as _url_quote
@@ -558,13 +623,12 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
             return f"{_EN_MONTHS[d.month - 1]} {d.day}"
         range_short = f"{_short_en(d0)} — {_short_en(d1)}, {d1.year}"
         footer.clear()
-        from bs4 import NavigableString
-        footer.append(NavigableString(
+        footer.append(_NS(
             f"Mind map generated from AI Daily Brief (NLW) episode summaries"
             f" · {range_short}"
         ))
         footer.append(soup.new_tag("br"))
-        footer.append(NavigableString(
+        footer.append(_NS(
             f"Click the filters above to navigate by theme · {episode_count} episodes · 5 main themes"
         ))
 
@@ -744,10 +808,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if obsidian_link:
             obsidian_link.attrs.pop("target", None)
             obsidian_link.attrs.pop("rel", None)
-            from bs4 import NavigableString
             for child in list(obsidian_link.children):
-                if isinstance(child, NavigableString) and child.strip():
-                    child.replace_with(NavigableString("\n      Open in Obsidian\n    "))
+                if isinstance(child, _NS) and child.strip():
+                    child.replace_with(_NS("\n      Open in Obsidian\n    "))
 
     modal_css = """
   /* ── Modal ───────────────────────────────────────────────── */
@@ -861,7 +924,7 @@ def process_file(md_path: Path, html_path: Path | None) -> None:
         card_messages = _build_card_messages(title, pub_date, summary)
         card = llm.chat_json(card_messages, schema=_CARD_SCHEMA, max_tokens=512, temperature=0.1)
         card.setdefault("title", title)  # model occasionally omits this field
-        card["actors"] = _detect_actors(f"{title} {card.get('summary_pt', '')} {' '.join(card.get('tags', []))}")
+        card["actors"] = _detect_actors(f"{title} {card.get('summary_en', card.get('summary_pt', ''))} {' '.join(card.get('tags', []))}")
         card["iso_date"] = _pub_date_to_iso(pub_date)
         card["summary_full"] = summary
         card["obsidian_uri"] = _obsidian_uri(md_path.name)
@@ -879,6 +942,106 @@ def process_file(md_path: Path, html_path: Path | None) -> None:
         tmp_md.write_text(new_fm + new_body, encoding="utf-8")
         tmp_md.replace(md_path)
         print(f"    ✓ Summary written to {md_path.name}")
+
+
+# ── English card regen ────────────────────────────────────────────────────────
+
+def _regen_english_cards(md_files: list[Path], html_path: Path) -> None:
+    """Re-generate card visible text (date, summary, key-points, tags) in English
+    for every AI Daily Brief md that lacks `card_english: true`.
+
+    Updates the card in the HTML DOM directly (BS4), then sets the flag so the
+    step is not repeated on future runs.
+    """
+    import llm
+    from bs4 import BeautifulSoup
+
+    html = html_path.read_text(encoding="utf-8")
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+
+    for md_path in md_files:
+        text = md_path.read_text(encoding="utf-8")
+        fm_block, body = _split_frontmatter(text)
+        if not fm_block:
+            continue
+        show = _get_fm_value(fm_block, "show")
+        if not show.startswith(SHOW_AI_DAILY_BRIEF):
+            continue
+        if _is_card_english(fm_block):
+            continue
+
+        title = _get_fm_value(fm_block, "title") or md_path.stem
+        pub_date = _get_fm_value(fm_block, "published")
+
+        if not _is_summarized(fm_block):
+            print(f"  [skip regen] Not yet summarized: {md_path.name}")
+            continue
+
+        summary_match = re.search(r'^## Summary\n+(.*?)(?=^## |\Z)', body, re.MULTILINE | re.DOTALL)
+        summary = summary_match.group(1).strip() if summary_match else ""
+
+        print(f"  → Regen English card: {md_path.name}")
+        try:
+            card_messages = _build_card_messages(title, pub_date, summary)
+            card = llm.chat_json(card_messages, schema=_CARD_SCHEMA, max_tokens=512, temperature=0.1)
+            card.setdefault("title", title)
+        except Exception as exc:
+            print(f"    ✗ LLM failed: {exc}")
+            continue
+
+        date_en = card.get("date_en", "")
+        summary_en = card.get("summary_en", "")
+        key_points = card.get("key_points", [])
+        tags = card.get("tags", [])
+
+        # Find this card in the DOM by title
+        card_tag = None
+        for c in soup.find_all("div", class_="article-card"):
+            h4 = c.find("h4", class_="article-title")
+            if h4 and h4.get_text().strip() == title:
+                card_tag = c
+                break
+
+        if card_tag is None:
+            print(f"    [warn] Card not found in HTML, skipping DOM patch")
+        else:
+            date_div = card_tag.find("div", class_="article-date")
+            if date_div:
+                date_div.string = date_en
+            summary_p = card_tag.find("p", class_="article-summary")
+            if summary_p:
+                summary_p.string = summary_en
+            ul = card_tag.find("ul", class_="key-points")
+            if ul:
+                ul.clear()
+                for pt in key_points:
+                    li = soup.new_tag("li")
+                    li.string = pt
+                    ul.append(li)
+            tags_div = card_tag.find("div", class_="tags")
+            if tags_div:
+                tags_div.clear()
+                for t in tags:
+                    span = soup.new_tag("span", attrs={"class": "tag"})
+                    span.string = t
+                    tags_div.append(span)
+            changed = True
+            print(f"    ✓ Card updated in HTML")
+
+        # Mark flag in frontmatter
+        new_fm = _set_fm_flag(fm_block, "card_english", "true")
+        tmp_md = md_path.with_suffix(".md.tmp")
+        tmp_md.write_text(new_fm + body, encoding="utf-8")
+        tmp_md.replace(md_path)
+
+    if changed:
+        out = str(soup)
+        shutil.copy2(html_path, html_path.with_suffix(".html.bak"))
+        tmp = html_path.with_suffix(".html.tmp")
+        tmp.write_text(out, encoding="utf-8")
+        tmp.replace(html_path)
+        print("  ✓ HTML saved after English card regen")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -926,6 +1089,14 @@ def main() -> None:
         except Exception as exc:
             print(f"  ✗ Failed {md_path.name}: {exc}")
             failed += 1
+
+    # Regen card text to English for any card that hasn't been translated yet
+    if html_path.exists():
+        print("\nRegenerating English card content...")
+        try:
+            _regen_english_cards(md_files, html_path)
+        except Exception as exc:
+            print(f"  ✗ English card regen failed: {exc}")
 
     # Always run HTML post-pass: backfill attrs, sort, update stats/UI
     if html_path.exists():
