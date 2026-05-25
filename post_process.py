@@ -248,6 +248,275 @@ def _build_card_messages(title: str, pub_date: str, summary_bullets: str) -> lis
     ]
 
 
+# ── Personal takeaways (Nelson-specific) ─────────────────────────────────────
+
+_PERSONAL_TAKEAWAYS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "takeaways": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "insight": {
+                        "type": "string",
+                        "description": "One-sentence insight drawn from the summaries, under 140 chars.",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Name of ONE specific project from Nelson's list this applies to.",
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": "One concrete action Nelson can take this week, under 140 chars.",
+                    },
+                },
+                "required": ["insight", "project", "action"],
+            },
+        },
+    },
+    "required": ["takeaways"],
+}
+
+
+def _build_personal_takeaways_messages(me_md: str, summaries_blob: str) -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You produce highly personalized, actionable takeaways for Nelson "
+                "from a corpus of AI podcast summaries. You output ONLY valid JSON "
+                "matching the requested schema. Every takeaway must satisfy ALL "
+                "criteria in Nelson's 'What Good Insights Look Like' rubric: "
+                "(1) applies to a specific active project or Claude Code setup, "
+                "(2) actionable this week, (3) challenges current architecture or "
+                "assumptions, (4) specific to Python/Telegram/Docker/AI tooling, "
+                "(5) helps him think about AI systems, not just AI features. "
+                "Reject generic advice. Each takeaway must name ONE specific project."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Nelson's personal profile (me.md):\n"
+                "================================\n"
+                f"{me_md}\n"
+                "================================\n\n"
+                "Aggregated summaries of recent AI Daily Brief episodes:\n"
+                "================================\n"
+                f"{summaries_blob}\n"
+                "================================\n\n"
+                "Produce exactly 5 takeaways. Each must:\n"
+                "- Name ONE specific project from Nelson's active list "
+                "(GarminBot, Xread, CNCSearch, NPChat, HetznerCheck, JMJ2027, "
+                "CienciaViva, JoaoAlmeidaTracker, PTStorms, Nektar, LiturgiaDasHoras, "
+                "canticos_site_flask, homeserver, obsidian-second-brain, "
+                "FinancialTracker, SpotifyTranscript, Whatsapp-Send-Message, "
+                "PTEvents, PTSquawk, MyClaw, Andre) "
+                "or his Claude Code setup.\n"
+                "- Tie the insight to a specific idea from the summaries.\n"
+                "- Give a concrete action Nelson can do this week.\n"
+                "- Avoid platitudes like 'consider AI' or 'AI is changing work'."
+            ),
+        },
+    ]
+
+
+def _collect_summaries_blob(md_dir: Path, max_chars: int = 60_000) -> str:
+    """Concatenate all transcription summaries into a single blob for LLM context."""
+    parts: list[str] = []
+    md_files = sorted(md_dir.glob("*.md"), reverse=True)  # newest first
+    for md_path in md_files:
+        try:
+            text = md_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        fm, body = _split_frontmatter(text)
+        if not fm:
+            continue
+        title = _get_fm_value(fm, "title") or md_path.stem
+        m = re.search(r'^## Summary\n+(.*?)(?=^## |\Z)', body, re.MULTILINE | re.DOTALL)
+        if not m:
+            continue
+        summary_text = m.group(1).strip()
+        parts.append(f"### {title}\n{summary_text}")
+    blob = "\n\n".join(parts)
+    if len(blob) > max_chars:
+        blob = blob[:max_chars]
+    return blob
+
+
+def _find_me_md(md_dir: Path) -> Path | None:
+    """Locate me.md in the Obsidian vault root.
+
+    Transcriptions live at <vault>/projects/SpotifyTranscript/Transcriptions/,
+    so vault root is md_dir.parents[2]. Allow override via env.
+    """
+    override = os.environ.get("OBSIDIAN_ME_PATH", "").strip()
+    if override:
+        p = Path(override)
+        if p.exists():
+            return p
+    try:
+        candidate = md_dir.parents[2] / "me.md"
+        if candidate.exists():
+            return candidate
+    except IndexError:
+        pass
+    return None
+
+
+def _generate_personal_takeaways(md_dir: Path) -> list[dict] | None:
+    """Generate 5 Nelson-specific takeaways from me.md + all summaries.
+
+    Returns None if me.md is missing, no summaries exist, or the LLM fails.
+    """
+    me_path = _find_me_md(md_dir)
+    if me_path is None:
+        print("  [takeaways] me.md not found — skipping personal takeaways section")
+        return None
+    try:
+        me_md = me_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        print(f"  [takeaways] failed to read me.md: {exc}")
+        return None
+
+    summaries_blob = _collect_summaries_blob(md_dir)
+    if not summaries_blob:
+        print("  [takeaways] no summaries found — skipping personal takeaways section")
+        return None
+
+    import llm
+    try:
+        messages = _build_personal_takeaways_messages(me_md, summaries_blob)
+        result = llm.chat_json(
+            messages,
+            schema=_PERSONAL_TAKEAWAYS_SCHEMA,
+            max_tokens=1500,
+            temperature=0.2,
+        )
+    except Exception as exc:
+        print(f"  [takeaways] LLM call failed: {exc}")
+        return None
+
+    takeaways = result.get("takeaways") if isinstance(result, dict) else None
+    if not takeaways or not isinstance(takeaways, list):
+        print("  [takeaways] LLM returned no takeaways")
+        return None
+    return takeaways[:5]
+
+
+def _inject_personal_takeaways_section(soup, takeaways: list[dict]) -> None:
+    """Insert (or replace) the .personal-takeaways section right after .central-node."""
+    from bs4 import BeautifulSoup as _BS
+
+    for existing in soup.find_all("div", class_="personal-takeaways"):
+        existing.decompose()
+
+    central = soup.find("div", class_="central-node")
+    if central is None:
+        return
+
+    cards_html_parts: list[str] = []
+    for idx, t in enumerate(takeaways, start=1):
+        insight = _html.escape(str(t.get("insight", "")))
+        project = _html.escape(str(t.get("project", "")))
+        action = _html.escape(str(t.get("action", "")))
+        cards_html_parts.append(
+            '<div class="takeaway-card">'
+            f'<div class="takeaway-num">{idx:02d}</div>'
+            '<div class="takeaway-body">'
+            f'<p class="takeaway-insight">{insight}</p>'
+            '<div class="takeaway-meta">'
+            f'<span class="takeaway-project">{project}</span>'
+            f'<span class="takeaway-action">→ {action}</span>'
+            '</div>'
+            '</div>'
+            '</div>'
+        )
+    cards_html = "".join(cards_html_parts)
+
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    section_html = (
+        '<div class="personal-takeaways">'
+        '<div class="takeaways-header">'
+        '<h3>⚡ Personal Takeaways for Nelson</h3>'
+        f'<span class="takeaways-stamp">updated {timestamp}</span>'
+        '</div>'
+        f'<div class="takeaways-grid">{cards_html}</div>'
+        '</div>'
+    )
+    new_section = _BS(section_html, "html.parser").find("div", class_="personal-takeaways")
+    central.insert_after(new_section)
+
+
+_PERSONAL_TAKEAWAYS_CSS = """
+  /* ── Personal Takeaways ──────────────────────────────────── */
+  .personal-takeaways {
+    grid-column: 1 / -1;
+    margin-top: 18px;
+    padding: 24px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(124,58,237,0.18), rgba(0,242,254,0.10));
+    border: 1px solid rgba(255,255,255,0.12);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+  }
+  .takeaways-header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 16px;
+  }
+  .takeaways-header h3 {
+    font-size: 1.25em;
+    background: linear-gradient(90deg, #00f2fe, #b465da);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .takeaways-stamp { font-size: 0.72em; color: #888; letter-spacing: 0.5px; text-transform: uppercase; }
+  .takeaways-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .takeaway-card {
+    display: flex; gap: 12px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-left: 3px solid #b465da;
+    border-radius: 10px;
+    padding: 14px 16px;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+  .takeaway-card:hover { transform: translateY(-2px); border-left-color: #00f2fe; }
+  .takeaway-num {
+    font-size: 1.4em; font-weight: 700;
+    background: linear-gradient(135deg, #b465da, #00f2fe);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    flex-shrink: 0; line-height: 1;
+  }
+  .takeaway-body { flex: 1; min-width: 0; }
+  .takeaway-insight { font-size: 0.9em; color: #e8e8e8; line-height: 1.45; margin-bottom: 8px; }
+  .takeaway-meta { display: flex; flex-direction: column; gap: 4px; }
+  .takeaway-project {
+    display: inline-block; align-self: flex-start;
+    font-size: 0.7em; font-weight: 600; letter-spacing: 0.5px;
+    color: #00f2fe; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 10px;
+    background: rgba(0,242,254,0.10); border: 1px solid rgba(0,242,254,0.25);
+  }
+  .takeaway-action { font-size: 0.78em; color: #b8b8b8; line-height: 1.4; }
+"""
+
+
+def _ensure_personal_takeaways_css(soup) -> None:
+    """Append the Personal Takeaways CSS block to <style> if not already present."""
+    style_tag = soup.find("style")
+    if style_tag and style_tag.string and "personal-takeaways" not in style_tag.string:
+        style_tag.string = style_tag.string + _PERSONAL_TAKEAWAYS_CSS
+
+
 # ── HTML card insertion ──────────────────────────────────────────────────────
 
 _ACCENT_COLORS = {
@@ -845,6 +1114,14 @@ document.addEventListener('DOMContentLoaded', function() {
     style_tag = soup.find("style")
     if style_tag and style_tag.string and "episode-modal" not in style_tag.string:
         style_tag.string = style_tag.string + modal_css
+
+    # ── 9c. Personal takeaways section (Nelson-specific, regenerated each sync) ─
+    _ensure_personal_takeaways_css(soup)
+    print("  → Generating personal takeaways...", flush=True)
+    takeaways = _generate_personal_takeaways(md_dir)
+    if takeaways:
+        _inject_personal_takeaways_section(soup, takeaways)
+        print(f"  ✓ Personal takeaways section updated ({len(takeaways)} items)")
 
     # ── 10. Write ─────────────────────────────────────────────────────────────
     out = str(soup)
