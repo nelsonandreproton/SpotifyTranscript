@@ -12,6 +12,7 @@ For each transcription .md in OBSIDIAN_TRANSCRIPTIONS_PATH that lacks
 
 from __future__ import annotations
 
+import copy
 import html as _html
 import os
 import re
@@ -683,6 +684,131 @@ def _fmt_en_date(d: datetime) -> str:
     return f"{_EN_MONTHS[d.month - 1]} {d.day}, {d.year}"
 
 
+_CENTRAL_NODE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "A punchy 5–10 word headline capturing the dominant AI narrative right now.",
+        },
+        "description": {
+            "type": "string",
+            "description": "2–3 sentences describing what this moment in AI is really about, grounded in specifics from the episodes.",
+        },
+    },
+    "required": ["title", "description"],
+}
+
+
+def _generate_central_node_text(md_dir: Path) -> tuple[str, str] | None:
+    """Generate a fresh (title, description) for the central node via LLM.
+
+    Returns None on any failure so the caller can keep existing text.
+    """
+    summaries_blob = _collect_summaries_blob(md_dir, max_chars=40_000)
+    if not summaries_blob:
+        return None
+
+    import llm
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You write punchy editorial copy for AI trend pages. "
+                "Output ONLY valid JSON matching the requested schema."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Based on the following AI Daily Brief episode summaries, write a "
+                "central-node headline and short description for an HTML mindmap page. "
+                "The headline should capture the dominant theme or inflection point of "
+                "this particular batch of episodes — not generic AI boosterism. "
+                "The description should mention specific developments or tensions from "
+                "the episodes (3–4 sentences max).\n\n"
+                f"Episode summaries:\n{summaries_blob}"
+            ),
+        },
+    ]
+    try:
+        result = llm.chat_json(messages, schema=_CENTRAL_NODE_SCHEMA, max_tokens=300, temperature=0.3)
+    except Exception as exc:
+        print(f"  [central-node] LLM call failed: {exc}")
+        return None
+
+    title = result.get("title", "").strip() if isinstance(result, dict) else ""
+    description = result.get("description", "").strip() if isinstance(result, dict) else ""
+    if not title or not description:
+        return None
+    return title, description
+
+
+_LATEST_CARD_CSS = """
+  /* ── Latest Episode Panel ────────────────────────────────── */
+  .latest-episode {
+    grid-column: 1 / -1;
+    margin-bottom: 4px;
+    padding: 18px 22px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(0,242,254,0.10), rgba(79,172,254,0.08));
+    border: 1px solid rgba(0,242,254,0.25);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.30);
+  }
+  .latest-episode-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+  }
+  .latest-episode-label {
+    font-size: 0.68em; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; color: #00f2fe;
+    background: rgba(0,242,254,0.10); border: 1px solid rgba(0,242,254,0.30);
+    padding: 3px 10px; border-radius: 10px;
+  }
+  .latest-episode-stamp { font-size: 0.68em; color: #666; }
+  .latest-episode .article-card {
+    margin: 0;
+    border-color: rgba(0,242,254,0.35);
+  }
+"""
+
+
+def _inject_latest_card_panel(soup, md_dir: Path) -> None:
+    """Insert (or replace) a .latest-episode panel as first child of .mindmap.
+
+    Clones the newest article-card by data-date so it stays in its theme section too.
+    Excluded from theme/actor filters via JS (selector targets only section-siblings).
+    """
+    from bs4 import BeautifulSoup as _BS
+
+    for old in soup.find_all("div", class_="latest-episode"):
+        old.decompose()
+
+    all_cards = soup.find_all("div", class_="article-card")
+    dated = [c for c in all_cards if c.get("data-date")]
+    if not dated:
+        return
+
+    latest = max(dated, key=lambda c: c.get("data-date", ""))
+    cloned = copy.copy(latest)
+
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    panel_shell = (
+        '<div class="latest-episode">'
+        '<div class="latest-episode-header">'
+        '<span class="latest-episode-label">⚡ Latest Episode</span>'
+        f'<span class="latest-episode-stamp">updated {timestamp}</span>'
+        '</div>'
+        '</div>'
+    )
+    panel_tag = _BS(panel_shell, "html.parser").find("div", class_="latest-episode")
+    panel_tag.append(cloned)
+
+    mindmap = soup.find("div", class_="mindmap")
+    if mindmap:
+        mindmap.insert(0, panel_tag)
+
+
 def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
     """Rebuild the HTML mindmap with BeautifulSoup:
     - Backfill data-date/data-actors on all cards
@@ -690,6 +816,8 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
     - Sort cards newest-first within each section
     - Add actor filter row + two-axis JS
     - Update dynamic stats (episode count, date range)
+    - Inject latest-episode panel (first child of .mindmap)
+    - Auto-generate central node title + description via LLM
     """
     from bs4 import BeautifulSoup, Tag, NavigableString as _NS
 
@@ -710,18 +838,22 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
     if h1_tag:
         h1_tag.string = "AI Daily Brief — Mind Map"
 
-    # Central node: translate in-place
+    # Central node: auto-generate via LLM (fallback: keep existing text)
     central = soup.find("div", class_="central-node")
     if central:
-        h2 = central.find("h2")
-        if h2:
-            h2.string = "The Agentic Era Meets Physical Reality"
-        p = central.find("p")
-        if p:
-            p.string = (
-                "May 2026 marks the inflection point where AI moved from unbounded experimentation "
-                "to colliding with compute scarcity, policy decisions, and the maturing of how we work with agents."
-            )
+        print("  → Generating central node text...", flush=True)
+        cn_result = _generate_central_node_text(md_dir)
+        if cn_result:
+            cn_title, cn_desc = cn_result
+            h2 = central.find("h2")
+            if h2:
+                h2.string = cn_title
+            p = central.find("p")
+            if p:
+                p.string = cn_desc
+            print(f"  ✓ Central node updated: '{cn_title[:60]}'")
+        else:
+            print("  [central-node] LLM unavailable — keeping existing text")
 
     # Theme section h3 + theme-desc
     _THEME_H3 = {kw: label for kw, label in THEMES}
@@ -948,7 +1080,8 @@ document.addEventListener('DOMContentLoaded', function() {
   let activeActor = 'all';
 
   function applyFilters() {
-    const cards = document.querySelectorAll('.article-card');
+    // Only filter cards that live inside a theme section (skip .latest-episode panel)
+    const cards = document.querySelectorAll('.theme-section ~ .article-card');
     const sections = document.querySelectorAll('.theme-section');
 
     cards.forEach(card => {
@@ -1115,7 +1248,14 @@ document.addEventListener('DOMContentLoaded', function() {
     if style_tag and style_tag.string and "episode-modal" not in style_tag.string:
         style_tag.string = style_tag.string + modal_css
 
-    # ── 9c. Personal takeaways section (Nelson-specific, regenerated each sync) ─
+    # ── 9c. Latest episode panel + Personal takeaways (regenerated each sync) ───
+    style_tag = soup.find("style")
+    if style_tag and style_tag.string and "latest-episode" not in style_tag.string:
+        style_tag.string = style_tag.string + _LATEST_CARD_CSS
+    print("  → Injecting latest episode panel...", flush=True)
+    _inject_latest_card_panel(soup, md_dir)
+    print("  ✓ Latest episode panel injected")
+
     _ensure_personal_takeaways_css(soup)
     print("  → Generating personal takeaways...", flush=True)
     takeaways = _generate_personal_takeaways(md_dir)
