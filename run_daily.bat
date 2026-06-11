@@ -18,7 +18,7 @@ if errorlevel 1 (
 
 echo [%date% %time%] Ingesting raw Obsidian notes... >> %LOGFILE% 2>&1
 echo [%date% %time%] Ingesting raw Obsidian notes...
-python raw_ingest.py >> %LOGFILE% 2>&1
+powershell -Command "& python raw_ingest.py 2>&1 | Tee-Object -FilePath '%LOGFILE%' -Append"
 if errorlevel 1 (
     echo [%date% %time%] raw_ingest.py failed >> %LOGFILE%
     echo [%date% %time%] raw_ingest.py failed
@@ -27,7 +27,7 @@ if errorlevel 1 (
 
 echo [%date% %time%] Starting post-processing... >> %LOGFILE% 2>&1
 echo [%date% %time%] Starting post-processing...
-python post_process.py >> %LOGFILE% 2>&1
+powershell -Command "& python post_process.py 2>&1 | Tee-Object -FilePath '%LOGFILE%' -Append"
 if errorlevel 1 (
     echo [%date% %time%] post_process.py failed >> %LOGFILE%
     echo [%date% %time%] post_process.py failed
