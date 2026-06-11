@@ -722,8 +722,8 @@ def _generate_central_node_text(md_dir: Path) -> tuple[str, str] | None:
             "role": "user",
             "content": (
                 "Based on the following AI Daily Brief episode summaries, write a "
-                "central-node headline and short description for an HTML mindmap page. "
-                "The headline should capture the dominant theme or inflection point of "
+                'central-node "title" (5–10 words) and "description" for an HTML mindmap page. '
+                "The title should capture the dominant theme or inflection point of "
                 "this particular batch of episodes — not generic AI boosterism. "
                 "The description should mention specific developments or tensions from "
                 "the episodes (3–4 sentences max).\n\n"
@@ -737,25 +737,38 @@ def _generate_central_node_text(md_dir: Path) -> tuple[str, str] | None:
         print(f"  [central-node] LLM call failed: {exc}")
         return None
 
-    title = result.get("title", "").strip() if isinstance(result, dict) else ""
-    description = result.get("description", "").strip() if isinstance(result, dict) else ""
+    if not isinstance(result, dict):
+        return None
+    # Accept "headline" as a fallback key in case the model ignores the schema property name
+    title = (result.get("title") or result.get("headline") or "").strip()
+    description = result.get("description", "").strip()
     if not title or not description:
+        print(f"  [central-node] unexpected keys in result: {list(result.keys())}")
         return None
     return title, description
 
 
 _LATEST_CARD_CSS = """
-  /* ── Latest Episode Panel ────────────────────────────────── */
-  .latest-episode {
+  /* ── Latest Panels Row (episode + article side-by-side) ──── */
+  .latest-panels-row {
     grid-column: 1 / -1;
-    margin-bottom: 4px;
+    display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 4px;
+  }
+  .latest-episode, .latest-article {
+    flex: 1 1 300px; min-width: 0;
     padding: 18px 22px;
     border-radius: 14px;
-    background: linear-gradient(135deg, rgba(0,242,254,0.10), rgba(79,172,254,0.08));
-    border: 1px solid rgba(0,242,254,0.25);
     box-shadow: 0 6px 24px rgba(0,0,0,0.30);
   }
-  .latest-episode-header {
+  .latest-episode {
+    background: linear-gradient(135deg, rgba(0,242,254,0.10), rgba(79,172,254,0.08));
+    border: 1px solid rgba(0,242,254,0.25);
+  }
+  .latest-article {
+    background: linear-gradient(135deg, rgba(255,200,100,0.10), rgba(255,159,67,0.08));
+    border: 1px solid rgba(255,200,100,0.25);
+  }
+  .latest-episode-header, .latest-article-header {
     display: flex; align-items: center; justify-content: space-between;
     gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
   }
@@ -765,48 +778,87 @@ _LATEST_CARD_CSS = """
     background: rgba(0,242,254,0.10); border: 1px solid rgba(0,242,254,0.30);
     padding: 3px 10px; border-radius: 10px;
   }
-  .latest-episode-stamp { font-size: 0.68em; color: #666; }
-  .latest-episode .article-card {
+  .latest-article-label {
+    font-size: 0.68em; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; color: #ffc864;
+    background: rgba(255,200,100,0.10); border: 1px solid rgba(255,200,100,0.30);
+    padding: 3px 10px; border-radius: 10px;
+  }
+  .latest-episode-stamp, .latest-article-stamp { font-size: 0.68em; color: #666; }
+  .latest-episode .article-card, .latest-article .article-card {
     margin: 0;
     border-color: rgba(0,242,254,0.35);
+  }
+  .latest-article .article-card {
+    border-color: rgba(255,200,100,0.35);
   }
 """
 
 
 def _inject_latest_card_panel(soup, md_dir: Path) -> None:
-    """Insert (or replace) a .latest-episode panel as first child of .mindmap.
+    """Insert (or replace) a .latest-panels-row with Latest Episode + Latest Article panels.
 
-    Clones the newest article-card by data-date so it stays in its theme section too.
-    Excluded from theme/actor filters via JS (selector targets only section-siblings).
+    Both panels clone the newest matching article-card. Excluded from theme/actor filters
+    via JS (selector targets only section-siblings).
     """
     from bs4 import BeautifulSoup as _BS
 
+    # Remove old panels row and any legacy standalone panels
+    for old in soup.find_all("div", class_="latest-panels-row"):
+        old.decompose()
     for old in soup.find_all("div", class_="latest-episode"):
+        old.decompose()
+    for old in soup.find_all("div", class_="latest-article"):
         old.decompose()
 
     all_cards = soup.find_all("div", class_="article-card")
-    dated = [c for c in all_cards if c.get("data-date")]
-    if not dated:
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+    # Latest Episode: newest podcast card (data-source != "raw")
+    episode_cards = [c for c in all_cards if c.get("data-date") and c.get("data-source") != "raw"]
+    episode_panel_html = ""
+    if episode_cards:
+        latest_ep = max(episode_cards, key=lambda c: c.get("data-date", ""))
+        cloned_ep = copy.copy(latest_ep)
+        ep_shell = (
+            '<div class="latest-episode">'
+            '<div class="latest-episode-header">'
+            '<span class="latest-episode-label">⚡ Latest Episode</span>'
+            f'<span class="latest-episode-stamp">updated {timestamp}</span>'
+            '</div>'
+            '</div>'
+        )
+        ep_tag = _BS(ep_shell, "html.parser").find("div", class_="latest-episode")
+        ep_tag.append(cloned_ep)
+        episode_panel_html = str(ep_tag)
+
+    # Latest Article: newest raw-ingest card (data-source="raw")
+    raw_cards = [c for c in all_cards if c.get("data-date") and c.get("data-source") == "raw"]
+    article_panel_html = ""
+    if raw_cards:
+        latest_art = max(raw_cards, key=lambda c: c.get("data-date", ""))
+        cloned_art = copy.copy(latest_art)
+        art_shell = (
+            '<div class="latest-article">'
+            '<div class="latest-article-header">'
+            '<span class="latest-article-label">📄 Latest Article</span>'
+            f'<span class="latest-article-stamp">updated {timestamp}</span>'
+            '</div>'
+            '</div>'
+        )
+        art_tag = _BS(art_shell, "html.parser").find("div", class_="latest-article")
+        art_tag.append(cloned_art)
+        article_panel_html = str(art_tag)
+
+    if not episode_panel_html and not article_panel_html:
         return
 
-    latest = max(dated, key=lambda c: c.get("data-date", ""))
-    cloned = copy.copy(latest)
-
-    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-    panel_shell = (
-        '<div class="latest-episode">'
-        '<div class="latest-episode-header">'
-        '<span class="latest-episode-label">⚡ Latest Episode</span>'
-        f'<span class="latest-episode-stamp">updated {timestamp}</span>'
-        '</div>'
-        '</div>'
-    )
-    panel_tag = _BS(panel_shell, "html.parser").find("div", class_="latest-episode")
-    panel_tag.append(cloned)
+    row_html = f'<div class="latest-panels-row">{episode_panel_html}{article_panel_html}</div>'
+    row_tag = _BS(row_html, "html.parser").find("div", class_="latest-panels-row")
 
     mindmap = soup.find("div", class_="mindmap")
     if mindmap:
-        mindmap.insert(0, panel_tag)
+        mindmap.insert(0, row_tag)
 
 
 def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
@@ -820,6 +872,16 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
     - Auto-generate central node title + description via LLM
     """
     from bs4 import BeautifulSoup, Tag, NavigableString as _NS
+
+    # Load extra (dynamic) themes added by raw_ingest.py
+    import json as _json
+    _state_path = Path(__file__).parent / "state.json"
+    _extra_themes: list[dict] = []
+    if _state_path.exists():
+        try:
+            _extra_themes = _json.loads(_state_path.read_text(encoding="utf-8")).get("extra_themes", [])
+        except Exception:
+            pass
 
     html = html_path.read_text(encoding="utf-8")
     soup = BeautifulSoup(html, "html.parser")
@@ -853,6 +915,13 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
                 p.string = cn_desc
             print(f"  ✓ Central node updated: '{cn_title[:60]}'")
         else:
+            # Replace known placeholder text left by the HTML template
+            h2 = central.find("h2") if central else None
+            p = central.find("p") if central else None
+            if h2 and h2.get_text().strip() in ("Test Title", ""):
+                h2.string = "AI Daily Brief — Mind Map"
+            if p and p.get_text().strip() in ("Test description.", ""):
+                p.string = "Visual summary of recent AI Daily Brief episodes."
             print("  [central-node] LLM unavailable — keeping existing text")
 
     # Theme section h3 + theme-desc
@@ -878,6 +947,17 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
                 btn.string = "All"
             elif df in _THEME_LABEL:
                 btn.string = _THEME_LABEL[df]
+        # Ensure buttons exist for extra (dynamic) themes
+        existing_filters = {btn.get("data-filter") for btn in theme_controls.find_all("button")}
+        from bs4 import BeautifulSoup as _BS2
+        for et in _extra_themes:
+            kw_et = et.get("keyword", "")
+            if kw_et and kw_et not in existing_filters:
+                label_et = et.get("label", kw_et)
+                short_et = label_et.split(" ", 1)[-1] if " " in label_et else label_et
+                new_btn_html = f'<button class="filter-btn theme-btn" data-filter="{kw_et}">{short_et}</button>'
+                new_btn = _BS2(new_btn_html, "html.parser").find("button")
+                theme_controls.append(new_btn)
 
     # ── 1. Build title→meta lookup from md files ─────────────────────────────
     from urllib.parse import quote as _url_quote
@@ -921,15 +1001,15 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
                 card["data-actors"] = ""
 
     # ── 3. Deduplicate: one card per title, prefer LLM-generated (has data-date) ─
-    # Drop any card with no data-date — these are pre-LLM manual cards superseded
-    # by the LLM-generated equivalents. Then deduplicate exact-title duplicates.
+    # Drop undated cards UNLESS they are raw-ingest cards (data-source="raw") —
+    # raw notes may legitimately lack a publication date and must not be lost.
     seen: dict[str, Tag] = {}
     for card in soup.find_all("div", class_="article-card"):
         h4 = card.find("h4", class_="article-title")
         if not h4:
             continue
-        if not card.get("data-date"):
-            continue  # drop undated legacy cards
+        if not card.get("data-date") and card.get("data-source") != "raw":
+            continue  # drop undated legacy podcast cards
         title = h4.get_text().strip()
         if title not in seen:
             seen[title] = card
@@ -957,6 +1037,17 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
                         del section[attr]
                 section["data-theme"] = kw
                 section["style"] = f"--accent:{accent}"
+                break
+    # Same pass for dynamic extra themes (raw_ingest.py may have added new sections)
+    for et in _extra_themes:
+        kw_et = et.get("keyword", "")
+        label_et = et.get("label", "")
+        accent_et = et.get("accent", "#4facfe")
+        if not kw_et:
+            continue
+        for section in soup.find_all("div", class_="theme-section"):
+            if section.get("data-theme") == kw_et:
+                section["style"] = f"--accent:{accent_et}"
                 break
 
     # Patch CSS: make .theme-section h3 use --accent instead of hardcoded blue
@@ -1029,8 +1120,9 @@ def _update_html_stats_and_ui(html_path: Path, md_dir: Path) -> None:
             f" · {range_short}"
         ))
         footer.append(soup.new_tag("br"))
+        total_themes = len(THEMES) + len(_extra_themes)
         footer.append(_NS(
-            f"Click the filters above to navigate by theme · {episode_count} episodes · 5 main themes"
+            f"Click the filters above to navigate by theme · {episode_count} episodes · {total_themes} main themes"
         ))
 
     # ── 8. Add/update actor filter row ───────────────────────────────────────
@@ -1250,13 +1342,18 @@ document.addEventListener('DOMContentLoaded', function() {
     if style_tag and style_tag.string and "episode-modal" not in style_tag.string:
         style_tag.string = style_tag.string + modal_css
 
-    # ── 9c. Latest episode panel + Personal takeaways (regenerated each sync) ───
+    # ── 9c. Latest panels row + Personal takeaways (regenerated each sync) ──────
     style_tag = soup.find("style")
-    if style_tag and style_tag.string and "latest-episode" not in style_tag.string:
+    if style_tag and style_tag.string and "latest-panels-row" not in style_tag.string:
+        # Remove old latest-episode CSS block if present to avoid duplication
+        style_tag.string = re.sub(
+            r'/\* ── Latest Episode Panel.*?(?=\n  /\*|\Z)', '',
+            style_tag.string, flags=re.DOTALL
+        )
         style_tag.string = style_tag.string + _LATEST_CARD_CSS
-    print("  → Injecting latest episode panel...", flush=True)
+    print("  → Injecting latest panels row...", flush=True)
     _inject_latest_card_panel(soup, md_dir)
-    print("  ✓ Latest episode panel injected")
+    print("  ✓ Latest panels row injected")
 
     _ensure_personal_takeaways_css(soup)
     print("  → Generating personal takeaways...", flush=True)
