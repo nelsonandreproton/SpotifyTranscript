@@ -19,7 +19,7 @@ import re
 import shutil
 import sys
 import tempfile
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -832,8 +832,12 @@ def _inject_latest_card_panel(soup, md_dir: Path) -> None:
         ep_tag.append(cloned_ep)
         episode_panel_html = str(ep_tag)
 
-    # Latest Article: newest raw-ingest card (data-source="raw")
-    raw_cards = [c for c in all_cards if c.get("data-date") and c.get("data-source") == "raw"]
+    # Latest Article: newest raw-ingest card from the last 30 days only
+    cutoff = (datetime.now(UTC).date() - timedelta(days=30)).isoformat()
+    raw_cards = [
+        c for c in all_cards
+        if c.get("data-source") == "raw" and c.get("data-date", "") >= cutoff
+    ]
     article_panel_html = ""
     if raw_cards:
         latest_art = max(raw_cards, key=lambda c: c.get("data-date", ""))
