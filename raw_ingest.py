@@ -508,23 +508,23 @@ def process_raw_note(
     content = body_stripped[:24_000]
 
     # Step 1: 20-point summary
-    print("    Generating summary...", flush=True)
+    print("    [1/5] Generating 20-point summary...", flush=True)
     messages = _build_summary_messages(title, content)
     summary = llm.chat(messages, max_tokens=1200, temperature=0.1)
     print(f"    Summary: {len(summary)} chars")
 
     # Step 2: Knowledge source page
+    print("    [2/5] Writing knowledge source page...", flush=True)
     slug = _slugify(title)
     knowledge_path = _write_knowledge_source(vault_path, slug, title, summary, source_url, author, date_str)
     print(f"    ✓ Knowledge source: {knowledge_path.name}")
 
     # Step 3: HTML card
+    print("    [3/5] Generating HTML card...", flush=True)
     themes = _all_themes(state)
     theme_keywords = [kw for kw, _ in themes]
     card_schema = _build_raw_card_schema(theme_keywords)
     card_messages = _build_card_messages(title, date_str or "Unknown", summary, themes)
-
-    print("    Generating HTML card...", flush=True)
     try:
         card = llm.chat_json(card_messages, schema=card_schema, max_tokens=512, temperature=0.1)
     except Exception as exc:
@@ -554,6 +554,7 @@ def process_raw_note(
         card["theme_keyword"] = "modelos"  # fallback
 
     # Step 4: Insert into HTML mindmap
+    print("    [4/5] Inserting card into HTML...", flush=True)
     if html_path.exists():
         inserted = _insert_raw_card_into_html(html_path, card, state)
         if inserted:
@@ -562,6 +563,7 @@ def process_raw_note(
             print(f"    [skip] Card already in HTML")
 
     # Step 5: Mark ingested
+    print("    [5/5] Marking ingested...", flush=True)
     _mark_ingested(md_path, fm_block, body)
     print(f"    ✓ Marked ingested: {md_path.name}")
     return True
@@ -615,11 +617,15 @@ def main() -> None:
         print("raw_ingest: nothing to do (all notes already ingested)")
         return
 
-    print(f"raw_ingest: {len(pending)} note(s) to process from {raw_dir}")
+    total = len(pending)
+    print(f"raw_ingest: {total} note(s) to process from {raw_dir}")
+    for i, p in enumerate(pending, 1):
+        print(f"  [{i}/{total}] {p.name}", flush=True)
 
     processed = 0
     failed = 0
-    for md_path in pending:
+    for i, md_path in enumerate(pending, 1):
+        print(f"\n[{i}/{total}] Processing: {md_path.name}", flush=True)
         try:
             did_work = process_raw_note(md_path, html_path, vault_path, state, state_path)
             if did_work:
