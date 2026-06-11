@@ -1148,11 +1148,13 @@ document.addEventListener('DOMContentLoaded', function() {
       const lines = summaryRaw.split('\\n').filter(l => l.trim());
       modalSummary.innerHTML = lines.map(l => `<li>${l.replace(/^\\d+\\.\\s*/, '')}</li>`).join('');
 
-      if (obsidianUri) {
-        modalObsidian.href = obsidianUri;
-        modalObsidian.style.display = 'inline-flex';
-      } else {
-        modalObsidian.style.display = 'none';
+      if (modalObsidian) {
+        if (obsidianUri) {
+          modalObsidian.href = obsidianUri;
+          modalObsidian.style.display = 'inline-flex';
+        } else {
+          modalObsidian.style.display = 'none';
+        }
       }
 
       modal.classList.remove('hidden');
@@ -1270,6 +1272,35 @@ document.addEventListener('DOMContentLoaded', function() {
     tmp.write_text(out, encoding="utf-8")
     tmp.replace(html_path)
     print(f"  ✓ HTML stats/UI updated ({episode_count} cards, {days_covered} days)")
+
+
+# ── Web variant (no Obsidian links) ─────────────────────────────────────────
+
+def _generate_web_variant(html_path: Path) -> Path:
+    """Produce a web-safe copy of the mindmap with all Obsidian-specific bits removed.
+
+    Strips:
+    - #modal-obsidian element (button that opens obsidian:// URIs)
+    - data-obsidian attributes on every card
+
+    Returns the path of the written web variant file.
+    """
+    from bs4 import BeautifulSoup
+
+    html = html_path.read_text(encoding="utf-8")
+    soup = BeautifulSoup(html, "html.parser")
+
+    obsidian_btn = soup.find(id="modal-obsidian")
+    if obsidian_btn:
+        obsidian_btn.decompose()
+
+    for card in soup.find_all("div", class_="article-card"):
+        if "data-obsidian" in card.attrs:
+            del card["data-obsidian"]
+
+    web_path = html_path.parent / "AI Daily Brief - Mind Map (Web).html"
+    web_path.write_text(str(soup), encoding="utf-8")
+    return web_path
 
 
 # ── File processing ──────────────────────────────────────────────────────────
@@ -1522,6 +1553,13 @@ def main() -> None:
             _update_html_stats_and_ui(html_path, transcriptions_dir)
         except Exception as exc:
             print(f"  ✗ HTML update failed: {exc}")
+
+        print("\nGenerating web variant (no Obsidian links)...")
+        try:
+            web_path = _generate_web_variant(html_path)
+            print(f"  ✓ Web variant written: {web_path.name}")
+        except Exception as exc:
+            print(f"  ✗ Web variant failed: {exc}")
 
     print(f"\n{'='*40}")
     print(f"Done. {processed} file(s) processed, {failed} failed.")
